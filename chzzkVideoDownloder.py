@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, ttk
 import yt_dlp
 import threading
 import os
@@ -8,10 +8,10 @@ import json
 
 CONFIG_FILE = "chzzk_config.json"
 
-class ChzzkDownloaderV5:
+class ChzzkDownloaderV6:
     def __init__(self, root):
         self.root = root
-        self.root.title("치지직 다시보기 다운로더 (설정 저장 & 로그인 기능)")
+        self.root.title("치지직 다시보기 다운로더 (NID_AUT/SES 입력)")
         self.root.geometry("800x650")
 
         # --- 변수 및 설정 ---
@@ -20,11 +20,12 @@ class ChzzkDownloaderV5:
         self.download_queue = queue.Queue()
         self.items_data = {}
 
-        # 설정 기본값
+        # 설정 기본값 (nid_aut, nid_ses 분리)
         self.config = {
             "save_path": os.path.join(os.path.expanduser('~'), 'Downloads'),
             "filename_format": "{artist} {year}-{month}-{day} {hour}H {title}.mp4",
-            "cookies": ""
+            "nid_aut": "",
+            "nid_ses": ""
         }
 
         # 설정 불러오기
@@ -33,7 +34,7 @@ class ChzzkDownloaderV5:
         # --- UI 구성 ---
         self.create_widgets()
 
-        # 종료 시 설정 저장 이벤트 바인딩
+        # 종료 시 설정 저장
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def load_config(self):
@@ -41,7 +42,10 @@ class ChzzkDownloaderV5:
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    self.config.update(loaded)
+                    # 기존 키 업데이트 (없는 키는 기본값 유지)
+                    for key in self.config.keys():
+                        if key in loaded:
+                            self.config[key] = loaded[key]
             except Exception as e:
                 print(f"설정 로드 실패: {e}")
 
@@ -49,7 +53,7 @@ class ChzzkDownloaderV5:
         # 현재 UI 값 업데이트
         self.config["save_path"] = self.path_entry.get()
         self.config["filename_format"] = self.filename_entry.get()
-        # cookies는 팝업에서 별도로 self.config["cookies"]에 저장됨
+        # nid_aut, nid_ses는 팝업에서 저장 시 업데이트됨
 
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -58,18 +62,17 @@ class ChzzkDownloaderV5:
             print(f"설정 저장 실패: {e}")
 
     def on_closing(self):
-        """프로그램 종료 시 호출"""
         self.save_config_file()
         self.root.destroy()
 
     def create_widgets(self):
-        # 상단 타이틀 및 로그인 버튼 영역
+        # 상단
         top_frame = tk.Frame(self.root, padx=10, pady=5)
         top_frame.pack(fill="x")
 
-        tk.Label(top_frame, text="치지직 다운로더 v5", font=("Bold", 14)).pack(side="left")
+        tk.Label(top_frame, text="치지직 다운로더 v6", font=("Bold", 14)).pack(side="left")
 
-        btn_cookie = tk.Button(top_frame, text="⚙️ 로그인 설정 (쿠키)", command=self.open_cookie_popup)
+        btn_cookie = tk.Button(top_frame, text="🔒 로그인 설정 (NID)", command=self.open_cookie_popup)
         btn_cookie.pack(side="right")
 
         # 1. 저장 경로
@@ -105,11 +108,10 @@ class ChzzkDownloaderV5:
         self.btn_add = tk.Button(input_frame, text="추가", bg="#00C73C", fg="white", command=self.add_to_queue)
         self.btn_add.pack(side="right")
 
-        # 4. 리스트 및 제어 버튼
+        # 4. 리스트
         list_frame = tk.LabelFrame(self.root, text="4. 다운로드 목록 및 제어", padx=10, pady=10)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # 트리뷰
         columns = ("filename", "status", "progress")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=10)
 
@@ -126,7 +128,7 @@ class ChzzkDownloaderV5:
         self.tree.pack(side="top", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 제어 버튼 영역
+        # 제어 버튼
         control_frame = tk.Frame(list_frame, pady=5)
         control_frame.pack(side="bottom", fill="x")
 
@@ -148,35 +150,51 @@ class ChzzkDownloaderV5:
         self.context_menu.add_command(label="중지", command=self.stop_item)
         self.tree.bind("<Button-3>", self.show_context_menu)
 
-    # --- 쿠키 팝업 UI ---
+    # --- 쿠키 팝업 UI (수정됨) ---
     def open_cookie_popup(self):
         popup = tk.Toplevel(self.root)
-        popup.title("로그인 정보 입력")
-        popup.geometry("500x400")
+        popup.title("네이버 로그인 정보 (NID)")
+        popup.geometry("450x250")
+        popup.resizable(False, False)
 
-        lbl = tk.Label(popup, text="아래에 브라우저의 Cookie 값을 붙여넣으세요.\n(성인 인증 또는 회원 전용 영상 다운로드 시 필요)", justify="left", pady=10)
-        lbl.pack()
+        # 안내 문구
+        lbl_info = tk.Label(popup, text="성인/유료 영상을 받으려면 브라우저 쿠키 값이 필요합니다.\nF12(개발자도구) > Application > Cookies 에서 확인 가능",
+                            justify="center", fg="gray", pady=10)
+        lbl_info.pack()
 
-        lbl_hint = tk.Label(popup, text="Tip: NID_AUT=...; NID_SES=...; 형식의 텍스트 권장", fg="gray", font=("System", 9))
-        lbl_hint.pack()
+        # 입력 폼 프레임
+        form_frame = tk.Frame(popup, padx=20)
+        form_frame.pack(fill="x")
 
-        txt_cookie = scrolledtext.ScrolledText(popup, height=15)
-        txt_cookie.pack(fill="both", expand=True, padx=10, pady=5)
+        # NID_AUT
+        lbl_aut = tk.Label(form_frame, text="NID_AUT :", font=("Bold", 10))
+        lbl_aut.grid(row=0, column=0, sticky="w", pady=5)
 
-        # 기존 저장된 쿠키 표시
-        if self.config["cookies"]:
-            txt_cookie.insert("1.0", self.config["cookies"])
+        entry_aut = tk.Entry(form_frame, width=40)
+        entry_aut.grid(row=0, column=1, pady=5, padx=5)
+        entry_aut.insert(0, self.config["nid_aut"])
 
-        def save_cookie():
-            cookie_val = txt_cookie.get("1.0", tk.END).strip()
-            self.config["cookies"] = cookie_val
-            # 저장 즉시 파일에도 반영
+        # NID_SES
+        lbl_ses = tk.Label(form_frame, text="NID_SES :", font=("Bold", 10))
+        lbl_ses.grid(row=1, column=0, sticky="w", pady=5)
+
+        entry_ses = tk.Entry(form_frame, width=40)
+        entry_ses.grid(row=1, column=1, pady=5, padx=5)
+        entry_ses.insert(0, self.config["nid_ses"])
+
+        def save_tokens():
+            aut_val = entry_aut.get().strip()
+            ses_val = entry_ses.get().strip()
+
+            self.config["nid_aut"] = aut_val
+            self.config["nid_ses"] = ses_val
+
             self.save_config_file()
-            messagebox.showinfo("저장 완료", "쿠키 정보가 저장되었습니다.\n다음 다운로드부터 적용됩니다.", parent=popup)
+            messagebox.showinfo("저장 완료", "로그인 정보가 저장되었습니다.", parent=popup)
             popup.destroy()
 
-        btn_save = tk.Button(popup, text="저장 및 닫기", bg="#00C73C", fg="white", command=save_cookie)
-        btn_save.pack(pady=10)
+        btn_save = tk.Button(popup, text="저장 및 닫기", bg="#00C73C", fg="white", width=20, height=2, command=save_tokens)
+        btn_save.pack(pady=20)
 
     # --- UI 이벤트 핸들러 ---
     def select_directory(self):
@@ -260,7 +278,7 @@ class ChzzkDownloaderV5:
             fmt += ".%(ext)s"
         return fmt
 
-    # --- 공통 옵션 생성 (쿠키 적용) ---
+    # --- 공통 옵션 생성 (쿠키 자동 조합) ---
     def get_ydl_opts(self, out_tmpl):
         opts = {
             'outtmpl': out_tmpl,
@@ -269,14 +287,17 @@ class ChzzkDownloaderV5:
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         }
 
-        # 쿠키가 설정되어 있다면 헤더에 추가
-        cookies = self.config.get("cookies", "").strip()
-        if cookies:
-            opts['http_headers'] = {'Cookie': cookies}
+        # NID_AUT, NID_SES가 있으면 쿠키 헤더 생성
+        nid_aut = self.config.get("nid_aut", "").strip()
+        nid_ses = self.config.get("nid_ses", "").strip()
+
+        if nid_aut and nid_ses:
+            cookie_str = f"NID_AUT={nid_aut}; NID_SES={nid_ses};"
+            opts['http_headers'] = {'Cookie': cookie_str}
 
         return opts
 
-    # --- 다운로드 및 대기열 관리 ---
+    # --- 다운로드 및 대기열 ---
     def add_to_queue(self):
         url = self.url_entry.get().strip()
         if not url: return
@@ -303,9 +324,7 @@ class ChzzkDownloaderV5:
         yt_template = self.convert_format(data['format_str'])
         full_template = f"{out_path}/{yt_template}"
 
-        # 메타데이터 추출용 옵션 (쿠키 적용)
         ydl_opts = self.get_ydl_opts(full_template)
-        # format은 메타데이터 추출 시 굳이 고화질일 필요 없으나 prepare_filename 정확도를 위해 유지
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -353,7 +372,6 @@ class ChzzkDownloaderV5:
                 p = d.get('_percent_str', '').strip()
                 self.root.after(0, self.update_status, item_id, "다운로드 중", p)
 
-        # 다운로드용 옵션 생성 (쿠키 적용)
         ydl_opts = self.get_ydl_opts(full_template)
         ydl_opts['noplaylist'] = True
         ydl_opts['progress_hooks'] = [progress_hook]
@@ -422,5 +440,5 @@ class ChzzkDownloaderV5:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ChzzkDownloaderV5(root)
+    app = ChzzkDownloaderV6(root)
     root.mainloop()
