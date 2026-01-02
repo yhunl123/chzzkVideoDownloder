@@ -1,63 +1,81 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, ttk
 import yt_dlp
 import threading
 import os
-from concurrent.futures import ThreadPoolExecutor
+import queue
 
-class ChzzkDownloaderApp:
+class ChzzkQueueDownloader:
     def __init__(self, root):
         self.root = root
-        self.root.title("치지직 다시보기 다운로더")
-        self.root.geometry("600x550")
-        self.root.resizable(False, False)
+        self.root.title("치지직 다시보기 대기열 다운로더")
+        self.root.geometry("700x600")
 
-        # 1. 다운로드 경로 선택
-        self.path_frame = tk.LabelFrame(root, text="1. 저장 경로", padx=10, pady=10)
-        self.path_frame.pack(fill="x", padx=10, pady=5)
+        # --- 변수 및 설정 ---
+        self.max_concurrent_downloads = 4  # 동시에 다운로드할 최대 개수
+        self.current_active_downloads = 0
+        self.download_queue = queue.Queue() # 대기열 (item_id 저장)
+        self.items_data = {} # item_id 별 URL 및 상태 관리
 
-        self.path_entry = tk.Entry(self.path_frame, width=50)
-        self.path_entry.pack(side="left", padx=5)
-        self.path_entry.insert(0, os.path.join(os.path.expanduser('~'), 'Downloads')) # 기본값: 다운로드 폴더
+        # --- UI 구성 ---
+        self.create_widgets()
 
-        self.btn_path = tk.Button(self.path_frame, text="폴더 변경", command=self.select_directory)
-        self.btn_path.pack(side="right")
+    def create_widgets(self):
+        # 1. 저장 경로 설정
+        path_frame = tk.LabelFrame(self.root, text="1. 저장 경로", padx=10, pady=10)
+        path_frame.pack(fill="x", padx=10, pady=5)
 
-        # 2. 파일명 형식 지정
-        self.format_frame = tk.LabelFrame(root, text="2. 파일 이름 형식 설정", padx=10, pady=10)
-        self.format_frame.pack(fill="x", padx=10, pady=5)
+        self.path_entry = tk.Entry(path_frame)
+        self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.path_entry.insert(0, os.path.join(os.path.expanduser('~'), 'Downloads'))
 
-        self.format_desc = tk.Label(self.format_frame, text="사용 가능 변수: {artist}, {title}, {year}, {month}, {day}, {hour}", fg="gray", font=("System", 9))
-        self.format_desc.pack(anchor="w", pady=(0, 5))
+        btn_path = tk.Button(path_frame, text="폴더 변경", command=self.select_directory)
+        btn_path.pack(side="right")
 
-        self.filename_entry = tk.Entry(self.format_frame, width=60)
+        # 2. 파일 이름 포맷 설정
+        format_frame = tk.LabelFrame(self.root, text="2. 파일 이름 형식", padx=10, pady=10)
+        format_frame.pack(fill="x", padx=10, pady=5)
+
+        desc_lbl = tk.Label(format_frame, text="{artist}, {title}, {year}/{month}/{day}/{hour}",
+                            fg="gray", font=("System", 9))
+        desc_lbl.pack(anchor="w")
+
+        self.filename_entry = tk.Entry(format_frame)
         self.filename_entry.pack(fill="x")
-        # 기본 예시 설정
+        # 요청하신 기본 포맷
         self.filename_entry.insert(0, "{artist} {year}-{month}-{day} {hour}H {title}.mp4")
 
-        # 3. URL 입력 (다중)
-        self.url_frame = tk.LabelFrame(root, text="3. 다시보기 링크 입력 (한 줄에 하나씩)", padx=10, pady=10)
-        self.url_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # 3. 링크 입력 및 추가
+        input_frame = tk.LabelFrame(self.root, text="3. 다운로드 추가 (실시간)", padx=10, pady=10)
+        input_frame.pack(fill="x", padx=10, pady=5)
 
-        self.url_text = scrolledtext.ScrolledText(self.url_frame, height=5)
-        self.url_text.pack(fill="both", expand=True)
+        self.url_entry = tk.Entry(input_frame)
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.url_entry.bind("<Return>", lambda event: self.add_to_queue()) # 엔터키 지원
 
-        # 4. 실행 버튼 및 상태
-        self.btn_frame = tk.Frame(root, padx=10, pady=10)
-        self.btn_frame.pack(fill="x")
+        self.btn_add = tk.Button(input_frame, text="추가", bg="#00C73C", fg="white", command=self.add_to_queue)
+        self.btn_add.pack(side="right")
 
-        self.status_label = tk.Label(self.btn_frame, text="대기 중...", fg="blue")
-        self.status_label.pack(side="left")
+        # 4. 대기열 리스트 (Treeview)
+        list_frame = tk.LabelFrame(self.root, text="다운로드 목록 (최대 4개 동시 진행)", padx=10, pady=10)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.btn_start = tk.Button(self.btn_frame, text="다운로드 시작", bg="#00C73C", fg="white", font=("Bold", 12), command=self.start_download_thread)
-        self.btn_start.pack(side="right")
+        columns = ("url", "status", "progress")
+        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=10)
 
-        # 5. 로그 창
-        self.log_frame = tk.LabelFrame(root, text="진행 상황", padx=10, pady=5)
-        self.log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.tree.heading("url", text="링크 / 제목")
+        self.tree.heading("status", text="상태")
+        self.tree.heading("progress", text="정보")
 
-        self.log_text = scrolledtext.ScrolledText(self.log_frame, height=8, state='disabled', bg="#f0f0f0")
-        self.log_text.pack(fill="both", expand=True)
+        self.tree.column("url", width=350)
+        self.tree.column("status", width=80, anchor="center")
+        self.tree.column("progress", width=150, anchor="center")
+
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
     def select_directory(self):
         path = filedialog.askdirectory()
@@ -65,85 +83,132 @@ class ChzzkDownloaderApp:
             self.path_entry.delete(0, tk.END)
             self.path_entry.insert(0, path)
 
-    def log(self, message):
-        self.log_text.config(state='normal')
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state='disabled')
-
-    def convert_filename_format(self, user_format):
+    def convert_format(self, user_fmt):
         """
-        사용자가 입력한 포맷을 yt-dlp 포맷으로 변환합니다.
+        사용자 입력 포맷을 yt-dlp 포맷으로 변환
+        {hour} -> %(timestamp>%H)s (timestamp 기준 시간)
         """
-        fmt = user_format
+        fmt = user_fmt
+        # yt-dlp 템플릿으로 매핑
         fmt = fmt.replace("{artist}", "%(uploader)s")
         fmt = fmt.replace("{title}", "%(title)s")
-        fmt = fmt.replace("{year}", "%(upload_date>%Y)s")
-        fmt = fmt.replace("{month}", "%(upload_date>%m)s")
-        fmt = fmt.replace("{day}", "%(upload_date>%d)s")
-        fmt = fmt.replace("{hour}", "%(upload_date>%H)s") # 주의: VOD 업로드 시간 기준
+        # 날짜/시간: timestamp(epoch) 기반 포맷팅 사용
+        fmt = fmt.replace("{year}", "%(timestamp>%Y)s")
+        fmt = fmt.replace("{month}", "%(timestamp>%m)s")
+        fmt = fmt.replace("{day}", "%(timestamp>%d)s")
+        fmt = fmt.replace("{hour}", "%(timestamp>%H)s")
 
-        # 확장자가 없으면 mp4 강제
         if not fmt.endswith(".mp4"):
             fmt += ".%(ext)s"
-
         return fmt
 
-    def download_video(self, url, output_path, output_template):
-        try:
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', # 최고화질 mp4
-                'outtmpl': f"{output_path}/{output_template}",
-                'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
-            }
-
-            self.root.after(0, self.log, f"▶ 다운로드 시작: {url}")
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                title = info.get('title', 'Unknown')
-                self.root.after(0, self.log, f"✅ 완료: {title}")
-
-        except Exception as e:
-            self.root.after(0, self.log, f"❌ 실패 ({url}): {str(e)}")
-
-    def run_downloads(self):
-        urls = self.url_text.get("1.0", tk.END).strip().split('\n')
-        urls = [u.strip() for u in urls if u.strip()]
-
-        if not urls:
-            messagebox.showwarning("경고", "다운로드할 링크를 입력해주세요.")
-            self.btn_start.config(state='normal')
+    def add_to_queue(self):
+        url = self.url_entry.get().strip()
+        if not url:
             return
 
-        output_path = self.path_entry.get()
-        user_format = self.filename_entry.get()
-        yt_dlp_template = self.convert_filename_format(user_format)
+        # UI 리스트에 추가
+        item_id = self.tree.insert("", "end", values=(url, "대기 중", "-"))
 
-        self.root.after(0, lambda: self.status_label.config(text=f"다운로드 중... (총 {len(urls)}개)"))
+        # 데이터 저장
+        self.items_data[item_id] = {
+            "url": url,
+            "output_path": self.path_entry.get(),
+            "format_str": self.filename_entry.get()
+        }
 
-        # 다중 다운로드를 위한 스레드 풀 (최대 3개 동시 다운로드)
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = []
-            for url in urls:
-                futures.append(executor.submit(self.download_video, url, output_path, yt_dlp_template))
+        # 대기열 큐에 넣기
+        self.download_queue.put(item_id)
 
-            # 모든 작업 완료 대기
-            for future in futures:
-                future.result()
+        # 입력창 초기화
+        self.url_entry.delete(0, tk.END)
 
-        self.root.after(0, lambda: self.status_label.config(text="모든 작업 완료"))
-        self.root.after(0, lambda: messagebox.showinfo("완료", "모든 다운로드가 완료되었습니다."))
-        self.root.after(0, lambda: self.btn_start.config(state='normal'))
+        # 큐 처리 시도
+        self.process_queue()
 
-    def start_download_thread(self):
-        self.btn_start.config(state='disabled')
-        thread = threading.Thread(target=self.run_downloads)
-        thread.start()
+    def process_queue(self):
+        """
+        현재 실행 중인 다운로드 수가 최대치 미만이고,
+        대기열에 항목이 있다면 작업을 시작함
+        """
+        if self.current_active_downloads < self.max_concurrent_downloads and not self.download_queue.empty():
+            item_id = self.download_queue.get()
+            self.start_download_thread(item_id)
+
+    def start_download_thread(self, item_id):
+        self.current_active_downloads += 1
+        self.update_status(item_id, "다운로드 중", "시작하는 중...")
+
+        # 스레드 시작
+        t = threading.Thread(target=self.download_task, args=(item_id,))
+        t.daemon = True
+        t.start()
+
+    def download_task(self, item_id):
+        data = self.items_data[item_id]
+        url = data['url']
+        out_path = data['output_path']
+        user_fmt = data['format_str']
+
+        yt_template = self.convert_format(user_fmt)
+        full_template = f"{out_path}/{yt_template}"
+
+        # yt-dlp 옵션
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': full_template,
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            # 진행 상황 hook (선택 사항: 원하면 구현 가능하나 여기선 단순화)
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # 1. 메타데이터 먼저 추출 (제목 업데이트용)
+                info = ydl.extract_info(url, download=False)
+                video_title = info.get('title', url)
+
+                # UI 업데이트 (메인 스레드에서 실행되도록 after 사용 권장이나 간단한 config는 보통 허용됨)
+                self.root.after(0, self.update_tree_title, item_id, video_title)
+                self.root.after(0, self.update_status, item_id, "다운로드 중", "영상 받는 중...")
+
+                # 2. 실제 다운로드
+                ydl.download([url])
+
+            self.root.after(0, self.update_status, item_id, "완료", "성공")
+
+        except Exception as e:
+            err_msg = str(e).split('\n')[0] # 첫 줄만 표시
+            self.root.after(0, self.update_status, item_id, "실패", "에러 발생")
+            print(f"Error: {e}")
+
+        finally:
+            # 작업 종료 처리
+            self.root.after(0, self.on_task_finished)
+
+    def on_task_finished(self):
+        """작업 하나가 끝났을 때 호출"""
+        self.current_active_downloads -= 1
+        # 다음 대기열 확인 및 시작
+        self.process_queue()
+
+    def update_status(self, item_id, status, progress_text):
+        try:
+            current_values = self.tree.item(item_id)['values']
+            # url(0), status(1), progress(2)
+            self.tree.item(item_id, values=(current_values[0], status, progress_text))
+        except:
+            pass
+
+    def update_tree_title(self, item_id, title):
+        try:
+            current_values = self.tree.item(item_id)['values']
+            self.tree.item(item_id, values=(title, current_values[1], current_values[2]))
+        except:
+            pass
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ChzzkDownloaderApp(root)
+    app = ChzzkQueueDownloader(root)
     root.mainloop()
