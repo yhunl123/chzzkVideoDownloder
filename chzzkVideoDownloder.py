@@ -8,10 +8,10 @@ import json
 
 CONFIG_FILE = "chzzk_config.json"
 
-class ChzzkDownloaderV6:
+class ChzzkDownloaderV7:
     def __init__(self, root):
         self.root = root
-        self.root.title("치지직 다시보기 다운로더 (NID_AUT/SES 입력)")
+        self.root.title("치지직 다시보기 다운로더")
         self.root.geometry("800x650")
 
         # --- 변수 및 설정 ---
@@ -20,7 +20,7 @@ class ChzzkDownloaderV6:
         self.download_queue = queue.Queue()
         self.items_data = {}
 
-        # 설정 기본값 (nid_aut, nid_ses 분리)
+        # 설정 기본값
         self.config = {
             "save_path": os.path.join(os.path.expanduser('~'), 'Downloads'),
             "filename_format": "{artist} {year}-{month}-{day} {hour}H {title}.mp4",
@@ -42,7 +42,6 @@ class ChzzkDownloaderV6:
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
-                    # 기존 키 업데이트 (없는 키는 기본값 유지)
                     for key in self.config.keys():
                         if key in loaded:
                             self.config[key] = loaded[key]
@@ -50,11 +49,8 @@ class ChzzkDownloaderV6:
                 print(f"설정 로드 실패: {e}")
 
     def save_config_file(self):
-        # 현재 UI 값 업데이트
         self.config["save_path"] = self.path_entry.get()
         self.config["filename_format"] = self.filename_entry.get()
-        # nid_aut, nid_ses는 팝업에서 저장 시 업데이트됨
-
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=4)
@@ -70,7 +66,7 @@ class ChzzkDownloaderV6:
         top_frame = tk.Frame(self.root, padx=10, pady=5)
         top_frame.pack(fill="x")
 
-        tk.Label(top_frame, text="치지직 다운로더 v6", font=("Bold", 14)).pack(side="left")
+        tk.Label(top_frame, text="치지직 다운로더", font=("Bold", 14)).pack(side="left")
 
         btn_cookie = tk.Button(top_frame, text="🔒 로그인 설정 (NID)", command=self.open_cookie_popup)
         btn_cookie.pack(side="right")
@@ -90,7 +86,7 @@ class ChzzkDownloaderV6:
         format_frame = tk.LabelFrame(self.root, text="2. 파일 이름 형식", padx=10, pady=10)
         format_frame.pack(fill="x", padx=10, pady=5)
 
-        desc_lbl = tk.Label(format_frame, text="{artist}:채널명, {title}:제목, {year}/{month}/{day}/{hour}:방송일시",
+        desc_lbl = tk.Label(format_frame, text="{artist}, {title}, {year}/{month}/{day}/{hour}",
                             fg="gray", font=("System", 9))
         desc_lbl.pack(anchor="w")
         self.filename_entry = tk.Entry(format_frame)
@@ -143,41 +139,34 @@ class ChzzkDownloaderV6:
 
         self.tree.bind("<<TreeviewSelect>>", self.on_item_select)
 
-        # 우클릭 메뉴
         self.context_menu = tk.Menu(self.root, tearoff=0)
         self.context_menu.add_command(label="일시정지", command=self.pause_item)
         self.context_menu.add_command(label="재개", command=self.resume_item)
         self.context_menu.add_command(label="중지", command=self.stop_item)
         self.tree.bind("<Button-3>", self.show_context_menu)
 
-    # --- 쿠키 팝업 UI (수정됨) ---
+    # --- 쿠키 팝업 UI ---
     def open_cookie_popup(self):
         popup = tk.Toplevel(self.root)
         popup.title("네이버 로그인 정보 (NID)")
         popup.geometry("450x250")
         popup.resizable(False, False)
 
-        # 안내 문구
         lbl_info = tk.Label(popup, text="성인/유료 영상을 받으려면 브라우저 쿠키 값이 필요합니다.\nF12(개발자도구) > Application > Cookies 에서 확인 가능",
                             justify="center", fg="gray", pady=10)
         lbl_info.pack()
 
-        # 입력 폼 프레임
         form_frame = tk.Frame(popup, padx=20)
         form_frame.pack(fill="x")
 
-        # NID_AUT
         lbl_aut = tk.Label(form_frame, text="NID_AUT :", font=("Bold", 10))
         lbl_aut.grid(row=0, column=0, sticky="w", pady=5)
-
         entry_aut = tk.Entry(form_frame, width=40)
         entry_aut.grid(row=0, column=1, pady=5, padx=5)
         entry_aut.insert(0, self.config["nid_aut"])
 
-        # NID_SES
         lbl_ses = tk.Label(form_frame, text="NID_SES :", font=("Bold", 10))
         lbl_ses.grid(row=1, column=0, sticky="w", pady=5)
-
         entry_ses = tk.Entry(form_frame, width=40)
         entry_ses.grid(row=1, column=1, pady=5, padx=5)
         entry_ses.insert(0, self.config["nid_ses"])
@@ -185,10 +174,8 @@ class ChzzkDownloaderV6:
         def save_tokens():
             aut_val = entry_aut.get().strip()
             ses_val = entry_ses.get().strip()
-
             self.config["nid_aut"] = aut_val
             self.config["nid_ses"] = ses_val
-
             self.save_config_file()
             messagebox.showinfo("저장 완료", "로그인 정보가 저장되었습니다.", parent=popup)
             popup.destroy()
@@ -278,23 +265,33 @@ class ChzzkDownloaderV6:
             fmt += ".%(ext)s"
         return fmt
 
-    # --- 공통 옵션 생성 (쿠키 자동 조합) ---
+    # --- 공통 옵션 생성 (수정됨: 에러 해결 옵션 추가) ---
     def get_ydl_opts(self, out_tmpl):
         opts = {
             'outtmpl': out_tmpl,
             'quiet': True,
             'no_warnings': True,
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+
+            # [수정] Initialization fragment 에러 해결을 위한 옵션
+            'hls_use_mpegts': True,
         }
 
-        # NID_AUT, NID_SES가 있으면 쿠키 헤더 생성
+        # 기본 헤더 설정 (User-Agent 등)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://chzzk.naver.com/',
+        }
+
+        # 쿠키 추가
         nid_aut = self.config.get("nid_aut", "").strip()
         nid_ses = self.config.get("nid_ses", "").strip()
 
         if nid_aut and nid_ses:
             cookie_str = f"NID_AUT={nid_aut}; NID_SES={nid_ses};"
-            opts['http_headers'] = {'Cookie': cookie_str}
+            headers['Cookie'] = cookie_str
 
+        opts['http_headers'] = headers
         return opts
 
     # --- 다운로드 및 대기열 ---
@@ -410,7 +407,12 @@ class ChzzkDownloaderV6:
                 self.root.after(0, lambda: self.finalize_task(item_id, True))
             else:
                 self.items_data[item_id]['status_code'] = 'error'
-                self.root.after(0, self.update_status, item_id, "실패", "에러 발생")
+                # 에러 메시지 간소화
+                err_text = "에러 발생"
+                if "HTTP Error 401" in msg: err_text = "인증 실패(401)"
+                elif "fragments" in msg: err_text = "프래그먼트 오류"
+
+                self.root.after(0, self.update_status, item_id, "실패", err_text)
                 print(f"Error: {e}")
                 self.root.after(0, lambda: self.finalize_task(item_id, True))
 
@@ -440,5 +442,5 @@ class ChzzkDownloaderV6:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ChzzkDownloaderV6(root)
+    app = ChzzkDownloaderV7(root)
     root.mainloop()
