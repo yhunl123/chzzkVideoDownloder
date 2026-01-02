@@ -5,14 +5,14 @@ import threading
 import os
 import queue
 import json
-import tempfile
+import subprocess # FFmpeg 직접 실행을 위해 추가
 
 CONFIG_FILE = "chzzk_config.json"
 
-class ChzzkDownloaderV9:
+class ChzzkDownloaderFinal:
     def __init__(self, root):
         self.root = root
-        self.root.title("치지직 다운로더 (최종: FFmpeg 직접 다운로드 모드)")
+        self.root.title("치지직 다운로더 (최종: FFmpeg 직접 호출 모드)")
         self.root.geometry("800x650")
 
         # --- 변수 및 설정 ---
@@ -20,7 +20,6 @@ class ChzzkDownloaderV9:
         self.current_active_downloads = 0
         self.download_queue = queue.Queue()
         self.items_data = {}
-        self.temp_cookie_file = None
 
         # 설정 기본값
         self.config = {
@@ -56,16 +55,13 @@ class ChzzkDownloaderV9:
 
     def on_closing(self):
         self.save_config_file()
-        if self.temp_cookie_file and os.path.exists(self.temp_cookie_file):
-            try: os.remove(self.temp_cookie_file)
-            except: pass
         self.root.destroy()
 
     def create_widgets(self):
         top_frame = tk.Frame(self.root, padx=10, pady=5)
         top_frame.pack(fill="x")
 
-        tk.Label(top_frame, text="치지직 다운로더 v9", font=("Bold", 14)).pack(side="left")
+        tk.Label(top_frame, text="치지직 다운로더 Final", font=("Bold", 14)).pack(side="left")
         btn_cookie = tk.Button(top_frame, text="🔒 로그인 설정 (NID)", command=self.open_cookie_popup)
         btn_cookie.pack(side="right")
 
@@ -151,9 +147,6 @@ class ChzzkDownloaderV9:
             self.config["nid_aut"] = entry_aut.get().strip()
             self.config["nid_ses"] = entry_ses.get().strip()
             self.save_config_file()
-            if self.temp_cookie_file and os.path.exists(self.temp_cookie_file):
-                os.remove(self.temp_cookie_file)
-            self.temp_cookie_file = None
             messagebox.showinfo("저장 완료", "로그인 정보가 저장되었습니다.", parent=popup)
             popup.destroy()
 
@@ -176,13 +169,11 @@ class ChzzkDownloaderV9:
         self.toggle_buttons(status)
 
     def toggle_buttons(self, status):
+        # 직접 FFmpeg를 쓰므로 일시정지/재개는 지원하기 어려움 (FFmpeg 프로세스 제어 복잡성 때문)
+        # 따라서 중지만 활성화
         if status == 'downloading':
-            self.btn_pause.config(state="normal")
-            self.btn_resume.config(state="disabled")
-            self.btn_stop.config(state="normal")
-        elif status == 'paused':
             self.btn_pause.config(state="disabled")
-            self.btn_resume.config(state="normal")
+            self.btn_resume.config(state="disabled")
             self.btn_stop.config(state="normal")
         elif status in ['waiting']:
             self.btn_pause.config(state="disabled")
@@ -201,20 +192,10 @@ class ChzzkDownloaderV9:
             self.context_menu.post(event.x_root, event.y_root)
 
     def pause_item(self):
-        selected = self.tree.selection()
-        if selected:
-            item_id = selected[0]
-            if self.items_data[item_id]['status_code'] == 'downloading':
-                self.items_data[item_id]['flag'] = 'pause'
-                self.update_status(item_id, status_text="일시정지 중...")
+        messagebox.showinfo("알림", "FFmpeg 직접 다운로드 모드에서는 일시정지를 지원하지 않습니다.")
 
     def resume_item(self):
-        selected = self.tree.selection()
-        if selected:
-            item_id = selected[0]
-            if self.items_data[item_id]['status_code'] == 'paused':
-                self.items_data[item_id]['flag'] = 'run'
-                self.start_download_thread(item_id, is_resume=True)
+        pass
 
     def stop_item(self):
         selected = self.tree.selection()
@@ -224,7 +205,7 @@ class ChzzkDownloaderV9:
             if current_status == 'waiting':
                 self.items_data[item_id]['status_code'] = 'stopped'
                 self.update_status(item_id, "중지됨", "대기 취소")
-            elif current_status in ['downloading', 'paused']:
+            elif current_status == 'downloading':
                 self.items_data[item_id]['flag'] = 'stop'
                 self.update_status(item_id, status_text="중지 중...")
 
@@ -239,50 +220,22 @@ class ChzzkDownloaderV9:
             fmt += ".%(ext)s"
         return fmt
 
-    def create_cookie_file(self):
-        if self.temp_cookie_file and os.path.exists(self.temp_cookie_file):
-            return self.temp_cookie_file
+    # --- 메타데이터 추출용 쿠키 설정 ---
+    def get_cookies_dict(self):
         nid_aut = self.config.get("nid_aut", "").strip()
         nid_ses = self.config.get("nid_ses", "").strip()
-        if not nid_aut or not nid_ses: return None
-        try:
-            fd, path = tempfile.mkstemp(suffix=".txt", text=True)
-            with os.fdopen(fd, 'w') as f:
-                f.write("# Netscape HTTP Cookie File\n")
-                expire = "1900000000"
-                f.write(f".naver.com\tTRUE\t/\tTRUE\t{expire}\tNID_AUT\t{nid_aut}\n")
-                f.write(f".naver.com\tTRUE\t/\tTRUE\t{expire}\tNID_SES\t{nid_ses}\n")
-                f.write(f".chzzk.naver.com\tTRUE\t/\tTRUE\t{expire}\tNID_AUT\t{nid_aut}\n")
-                f.write(f".chzzk.naver.com\tTRUE\t/\tTRUE\t{expire}\tNID_SES\t{nid_ses}\n")
-            self.temp_cookie_file = path
-            return path
-        except: return None
+        if nid_aut and nid_ses:
+            return {'NID_AUT': nid_aut, 'NID_SES': nid_ses}
+        return {}
 
-    # --- 핵심 수정: FFmpeg를 외부 다운로더로 지정 ---
-    def get_ydl_opts(self, out_tmpl):
-        cookie_path = self.create_cookie_file()
-
-        opts = {
-            'outtmpl': out_tmpl,
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'best', # 외부 다운로더 사용 시 best가 가장 안정적
-
-            # [중요] 다운로드 엔진을 FFmpeg로 강제 변경
-            'external_downloader': 'ffmpeg',
-            'external_downloader_args': ['-loglevel', 'panic'], # 로그 숨김
-
-            # 혹시 모를 내부 처리를 위해 유지
-            'hls_use_mpegts': True,
-        }
-
-        if cookie_path:
-            opts['cookiefile'] = cookie_path
-
-        opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        }
-        return opts
+    # --- FFmpeg 헤더 문자열 생성 ---
+    def get_ffmpeg_headers(self):
+        headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36\r\n"
+        nid_aut = self.config.get("nid_aut", "").strip()
+        nid_ses = self.config.get("nid_ses", "").strip()
+        if nid_aut and nid_ses:
+            headers += f"Cookie: NID_AUT={nid_aut}; NID_SES={nid_ses};\r\n"
+        return headers
 
     def add_to_queue(self):
         url = self.url_entry.get().strip()
@@ -291,7 +244,8 @@ class ChzzkDownloaderV9:
         self.items_data[item_id] = {
             "url": url, "output_path": self.path_entry.get(),
             "format_str": self.filename_entry.get(),
-            "status_code": "waiting", "flag": "run"
+            "status_code": "waiting", "flag": "run",
+            "process": None # subprocess 저장용
         }
         threading.Thread(target=self.prefetch_metadata, args=(item_id,), daemon=True).start()
         self.download_queue.put(item_id)
@@ -299,23 +253,40 @@ class ChzzkDownloaderV9:
         self.process_queue()
 
     def prefetch_metadata(self, item_id):
+        # yt-dlp로 메타데이터(제목, m3u8 주소)만 가져옴
         data = self.items_data[item_id]
-        # 메타데이터 추출용은 외부 다운로더 옵션 제외 (속도 위해)
-        basic_opts = {
-            'quiet': True, 'no_warnings': True, 'format': 'best',
-            'http_headers': {'User-Agent': 'Mozilla/5.0 ...'}
+
+        ydl_opts = {
+            'quiet': True, 'no_warnings': True,
+            'format': 'best', # 메타데이터용
         }
-        cookie_path = self.create_cookie_file()
-        if cookie_path: basic_opts['cookiefile'] = cookie_path
+
+        # 쿠키 적용
+        cookies = self.get_cookies_dict()
+        if cookies:
+            ydl_opts['cookiefile'] = None # 파일 대신 딕셔너리 사용 시도 또는 헤더 주입 필요
+            # yt-dlp에서 cookies dict 지원이 불안정할 수 있으므로 http_headers 사용
+            cookie_str = f"NID_AUT={cookies['NID_AUT']}; NID_SES={cookies['NID_SES']};"
+            ydl_opts['http_headers'] = {'Cookie': cookie_str}
 
         try:
-            with yt_dlp.YoutubeDL(basic_opts) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(data['url'], download=False)
+                # 실제 영상 스트림 URL (m3u8)
+                data['stream_url'] = info.get('url')
+
+                # 파일명 계산
                 target_filename = ydl.prepare_filename(info)
                 filename_only = os.path.splitext(os.path.basename(target_filename))[0]
+
+                # 데이터 저장
+                self.items_data[item_id]['target_filename'] = filename_only
                 self.root.after(0, self.update_tree_filename, item_id, filename_only)
+
         except Exception as e:
             self.root.after(0, self.update_tree_filename, item_id, f"오류: {data['url']}")
+            # 실패 시 다운로드 불가 처리
+            self.items_data[item_id]['status_code'] = 'error'
 
     def process_queue(self):
         while self.current_active_downloads < self.max_concurrent_downloads and not self.download_queue.empty():
@@ -326,72 +297,96 @@ class ChzzkDownloaderV9:
     def start_download_thread(self, item_id, is_resume=False):
         if not is_resume: self.current_active_downloads += 1
         self.items_data[item_id]['status_code'] = 'downloading'
-        self.update_status(item_id, "다운로드 중", "준비 중...")
+        self.update_status(item_id, "다운로드 중", "FFmpeg 실행 중...")
         if self.tree.selection() and self.tree.selection()[0] == item_id:
             self.toggle_buttons('downloading')
-        t = threading.Thread(target=self.download_task, args=(item_id,))
+        t = threading.Thread(target=self.download_task_ffmpeg, args=(item_id,))
         t.daemon = True
         t.start()
 
-    def download_task(self, item_id):
+    def download_task_ffmpeg(self, item_id):
+        # yt-dlp가 아닌 FFmpeg subprocess 직접 실행
         data = self.items_data[item_id]
-        url = data['url']
-        out_path = data['output_path']
-        yt_template = self.convert_format(data['format_str'])
-        full_template = f"{out_path}/{yt_template}"
 
-        def progress_hook(d):
-            if d['status'] == 'downloading':
-                flag = self.items_data[item_id]['flag']
-                if flag == 'pause': raise Exception("USER_PAUSE")
-                elif flag == 'stop': raise Exception("USER_STOP")
-                # external downloader 사용 시 퍼센트 정보가 정확하지 않을 수 있음
-                # d.get('_percent_str')가 없으면 '진행 중'으로 표시
-                p = d.get('_percent_str', '진행 중...').strip()
-                self.root.after(0, self.update_status, item_id, "다운로드 중", p)
-
-        ydl_opts = self.get_ydl_opts(full_template)
-        ydl_opts['noplaylist'] = True
-        ydl_opts['progress_hooks'] = [progress_hook]
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                target_file = ydl.prepare_filename(info)
-                filename_only = os.path.splitext(os.path.basename(target_file))[0]
-                self.root.after(0, self.update_tree_filename, item_id, filename_only)
-
-                if not os.path.exists(target_file + ".part") and os.path.exists(target_file):
-                    self.items_data[item_id]['status_code'] = 'error'
-                    self.root.after(0, self.update_status, item_id, "중복/취소", "파일 존재함")
-                    self.root.after(0, lambda: messagebox.showinfo("알림", f"중복 파일: {filename_only}"))
-                    self.root.after(0, lambda: self.finalize_task(item_id, False))
-                    return
-                ydl.download([url])
-
-            self.items_data[item_id]['status_code'] = 'completed'
-            self.root.after(0, self.update_status, item_id, "완료", "100%")
+        # 1. 스트림 URL 확보 확인
+        if 'stream_url' not in data:
+            # prefetch에서 실패했거나 아직 안된 경우 다시 시도 (생략, prefetch가 먼저 끝난다고 가정)
+            self.root.after(0, self.update_status, item_id, "실패", "주소 확보 불가")
             self.root.after(0, lambda: self.finalize_task(item_id, True))
+            return
+
+        stream_url = data['stream_url']
+        save_name = data.get('target_filename', 'download_video') + ".mp4"
+        full_path = os.path.join(data['output_path'], save_name)
+
+        # 중복 체크
+        if os.path.exists(full_path):
+            self.items_data[item_id]['status_code'] = 'error'
+            self.root.after(0, self.update_status, item_id, "중복/취소", "파일 존재함")
+            self.root.after(0, lambda: messagebox.showinfo("알림", f"중복 파일: {save_name}"))
+            self.root.after(0, lambda: self.finalize_task(item_id, True))
+            return
+
+        # 2. FFmpeg 명령어 구성
+        headers = self.get_ffmpeg_headers()
+
+        # ffmpeg -y -headers "..." -i "URL" -c copy -bsf:a aac_adtstoasc "output.mp4"
+        cmd = [
+            'ffmpeg',
+            '-y', # 덮어쓰기 허용 (어차피 중복체크 함)
+            '-headers', headers,
+            '-i', stream_url,
+            '-c', 'copy', # 재인코딩 없이 복사 (최고속도/화질보존)
+            '-bsf:a', 'aac_adtstoasc', # m3u8 to mp4 변환 시 필수 필터
+            full_path
+        ]
+
+        # 3. 프로세스 실행
+        try:
+            # 윈도우에서 콘솔창 뜨지 않게 설정
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+                startupinfo=startupinfo
+            )
+            self.items_data[item_id]['process'] = process
+
+            # 프로세스 종료 대기
+            while process.poll() is None:
+                # 사용자가 중지 요청했는지 확인
+                if self.items_data[item_id]['flag'] == 'stop':
+                    process.kill()
+                    self.root.after(0, self.update_status, item_id, "중지됨", "사용자 취소")
+                    self.root.after(0, lambda: self.finalize_task(item_id, True))
+                    return
+
+                # 진행률은 파싱하기 어려우므로 '진행 중' 표시 유지
+                # 필요하다면 stderr를 읽어서 duration 대비 time을 계산해야 함 (복잡도 상승)
+                self.root.after(0, self.update_status, item_id, "다운로드 중", "영상 저장 중...")
+
+                process.wait(timeout=1.0) # 1초마다 상태 체크
+
+            # 종료 후 상태 확인
+            if process.returncode == 0:
+                self.items_data[item_id]['status_code'] = 'completed'
+                self.root.after(0, self.update_status, item_id, "완료", "100%")
+            else:
+                # 에러 발생
+                self.items_data[item_id]['status_code'] = 'error'
+                self.root.after(0, self.update_status, item_id, "실패", f"코드 {process.returncode}")
 
         except Exception as e:
-            msg = str(e)
-            if "USER_PAUSE" in msg:
-                self.items_data[item_id]['status_code'] = 'paused'
-                self.root.after(0, self.update_status, item_id, "일시정지", "대기 중...")
-                if self.tree.selection() and self.tree.selection()[0] == item_id:
-                    self.root.after(0, lambda: self.toggle_buttons('paused'))
-            elif "USER_STOP" in msg:
-                self.items_data[item_id]['status_code'] = 'stopped'
-                self.root.after(0, self.update_status, item_id, "중지됨", "사용자 취소")
-                self.root.after(0, lambda: self.finalize_task(item_id, True))
-            else:
-                self.items_data[item_id]['status_code'] = 'error'
-                err_text = "에러 발생"
-                if "HTTP Error 401" in msg: err_text = "인증 실패(401)"
-                elif "ffmpeg" in msg.lower(): err_text = "FFmpeg 오류"
-                self.root.after(0, self.update_status, item_id, "실패", err_text)
-                print(f"Error: {e}")
-                self.root.after(0, lambda: self.finalize_task(item_id, True))
+            print(f"FFmpeg 실행 에러: {e}")
+            self.items_data[item_id]['status_code'] = 'error'
+            self.root.after(0, self.update_status, item_id, "실패", "실행 오류")
+
+        finally:
+            self.root.after(0, lambda: self.finalize_task(item_id, True))
 
     def finalize_task(self, item_id, release_slot):
         if release_slot:
@@ -418,5 +413,5 @@ class ChzzkDownloaderV9:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ChzzkDownloaderV9(root)
+    app = ChzzkDownloaderFinal(root)
     root.mainloop()
