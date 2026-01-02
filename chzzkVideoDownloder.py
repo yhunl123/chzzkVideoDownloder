@@ -1,14 +1,17 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 import yt_dlp
 import threading
 import os
 import queue
+import json
 
-class ChzzkDownloaderV4:
+CONFIG_FILE = "chzzk_config.json"
+
+class ChzzkDownloaderV5:
     def __init__(self, root):
         self.root = root
-        self.root.title("치지직 다시보기 다운로더")
+        self.root.title("치지직 다시보기 다운로더 (설정 저장 & 로그인 기능)")
         self.root.geometry("800x650")
 
         # --- 변수 및 설정 ---
@@ -17,17 +20,65 @@ class ChzzkDownloaderV4:
         self.download_queue = queue.Queue()
         self.items_data = {}
 
+        # 설정 기본값
+        self.config = {
+            "save_path": os.path.join(os.path.expanduser('~'), 'Downloads'),
+            "filename_format": "{artist} {year}-{month}-{day} {hour}H {title}.mp4",
+            "cookies": ""
+        }
+
+        # 설정 불러오기
+        self.load_config()
+
         # --- UI 구성 ---
         self.create_widgets()
 
+        # 종료 시 설정 저장 이벤트 바인딩
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    self.config.update(loaded)
+            except Exception as e:
+                print(f"설정 로드 실패: {e}")
+
+    def save_config_file(self):
+        # 현재 UI 값 업데이트
+        self.config["save_path"] = self.path_entry.get()
+        self.config["filename_format"] = self.filename_entry.get()
+        # cookies는 팝업에서 별도로 self.config["cookies"]에 저장됨
+
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"설정 저장 실패: {e}")
+
+    def on_closing(self):
+        """프로그램 종료 시 호출"""
+        self.save_config_file()
+        self.root.destroy()
+
     def create_widgets(self):
+        # 상단 타이틀 및 로그인 버튼 영역
+        top_frame = tk.Frame(self.root, padx=10, pady=5)
+        top_frame.pack(fill="x")
+
+        tk.Label(top_frame, text="치지직 다운로더 v5", font=("Bold", 14)).pack(side="left")
+
+        btn_cookie = tk.Button(top_frame, text="⚙️ 로그인 설정 (쿠키)", command=self.open_cookie_popup)
+        btn_cookie.pack(side="right")
+
         # 1. 저장 경로
         path_frame = tk.LabelFrame(self.root, text="1. 저장 경로", padx=10, pady=10)
         path_frame.pack(fill="x", padx=10, pady=5)
 
         self.path_entry = tk.Entry(path_frame)
         self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.path_entry.insert(0, os.path.join(os.path.expanduser('~'), 'Downloads'))
+        self.path_entry.insert(0, self.config["save_path"])
 
         btn_path = tk.Button(path_frame, text="폴더 변경", command=self.select_directory)
         btn_path.pack(side="right")
@@ -36,12 +87,12 @@ class ChzzkDownloaderV4:
         format_frame = tk.LabelFrame(self.root, text="2. 파일 이름 형식", padx=10, pady=10)
         format_frame.pack(fill="x", padx=10, pady=5)
 
-        desc_lbl = tk.Label(format_frame, text="{artist}, {title}, {year}/{month}/{day}/{hour}",
+        desc_lbl = tk.Label(format_frame, text="{artist}:채널명, {title}:제목, {year}/{month}/{day}/{hour}:방송일시",
                             fg="gray", font=("System", 9))
         desc_lbl.pack(anchor="w")
         self.filename_entry = tk.Entry(format_frame)
         self.filename_entry.pack(fill="x")
-        self.filename_entry.insert(0, "{artist} {year}-{month}-{day} {hour}H {title}.mp4")
+        self.filename_entry.insert(0, self.config["filename_format"])
 
         # 3. 링크 입력
         input_frame = tk.LabelFrame(self.root, text="3. 다운로드 추가", padx=10, pady=10)
@@ -58,12 +109,11 @@ class ChzzkDownloaderV4:
         list_frame = tk.LabelFrame(self.root, text="4. 다운로드 목록 및 제어", padx=10, pady=10)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # 트리뷰 (리스트)
+        # 트리뷰
         columns = ("filename", "status", "progress")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=10)
 
-        # 컬럼명 수정: 링크 -> 파일명
-        self.tree.heading("filename", text="파일명")
+        self.tree.heading("filename", text="파일명 (확장자 제외)")
         self.tree.heading("status", text="상태")
         self.tree.heading("progress", text="정보")
 
@@ -97,6 +147,36 @@ class ChzzkDownloaderV4:
         self.context_menu.add_command(label="재개", command=self.resume_item)
         self.context_menu.add_command(label="중지", command=self.stop_item)
         self.tree.bind("<Button-3>", self.show_context_menu)
+
+    # --- 쿠키 팝업 UI ---
+    def open_cookie_popup(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("로그인 정보 입력")
+        popup.geometry("500x400")
+
+        lbl = tk.Label(popup, text="아래에 브라우저의 Cookie 값을 붙여넣으세요.\n(성인 인증 또는 회원 전용 영상 다운로드 시 필요)", justify="left", pady=10)
+        lbl.pack()
+
+        lbl_hint = tk.Label(popup, text="Tip: NID_AUT=...; NID_SES=...; 형식의 텍스트 권장", fg="gray", font=("System", 9))
+        lbl_hint.pack()
+
+        txt_cookie = scrolledtext.ScrolledText(popup, height=15)
+        txt_cookie.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # 기존 저장된 쿠키 표시
+        if self.config["cookies"]:
+            txt_cookie.insert("1.0", self.config["cookies"])
+
+        def save_cookie():
+            cookie_val = txt_cookie.get("1.0", tk.END).strip()
+            self.config["cookies"] = cookie_val
+            # 저장 즉시 파일에도 반영
+            self.save_config_file()
+            messagebox.showinfo("저장 완료", "쿠키 정보가 저장되었습니다.\n다음 다운로드부터 적용됩니다.", parent=popup)
+            popup.destroy()
+
+        btn_save = tk.Button(popup, text="저장 및 닫기", bg="#00C73C", fg="white", command=save_cookie)
+        btn_save.pack(pady=10)
 
     # --- UI 이벤트 핸들러 ---
     def select_directory(self):
@@ -180,12 +260,27 @@ class ChzzkDownloaderV4:
             fmt += ".%(ext)s"
         return fmt
 
+    # --- 공통 옵션 생성 (쿠키 적용) ---
+    def get_ydl_opts(self, out_tmpl):
+        opts = {
+            'outtmpl': out_tmpl,
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        }
+
+        # 쿠키가 설정되어 있다면 헤더에 추가
+        cookies = self.config.get("cookies", "").strip()
+        if cookies:
+            opts['http_headers'] = {'Cookie': cookies}
+
+        return opts
+
     # --- 다운로드 및 대기열 관리 ---
     def add_to_queue(self):
         url = self.url_entry.get().strip()
         if not url: return
 
-        # 초기에는 '정보 불러오는 중...'으로 표시
         item_id = self.tree.insert("", "end", values=("정보 불러오는 중...", "대기 중", "0%"))
 
         self.items_data[item_id] = {
@@ -196,42 +291,29 @@ class ChzzkDownloaderV4:
             "flag": "run"
         }
 
-        # 1. 메타데이터 미리보기 스레드 시작 (파일명 표시용)
         threading.Thread(target=self.prefetch_metadata, args=(item_id,), daemon=True).start()
-
-        # 2. 대기열 추가 및 처리
         self.download_queue.put(item_id)
         self.url_entry.delete(0, tk.END)
         self.process_queue()
 
     def prefetch_metadata(self, item_id):
-        """다운로드 전에 파일명을 미리 계산해서 리스트에 표시"""
         data = self.items_data[item_id]
         url = data['url']
         out_path = data['output_path']
         yt_template = self.convert_format(data['format_str'])
         full_template = f"{out_path}/{yt_template}"
 
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'outtmpl': full_template,
-            'format': 'best' # 메타데이터만 필요하므로 포맷은 크게 상관없음
-        }
+        # 메타데이터 추출용 옵션 (쿠키 적용)
+        ydl_opts = self.get_ydl_opts(full_template)
+        # format은 메타데이터 추출 시 굳이 고화질일 필요 없으나 prepare_filename 정확도를 위해 유지
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                # 실제 생성될 파일 경로 계산
                 target_filename = ydl.prepare_filename(info)
-
-                # 확장자 제거 및 경로 제거 (파일명만 표시)
                 filename_only = os.path.splitext(os.path.basename(target_filename))[0]
-
-                # UI 업데이트
                 self.root.after(0, self.update_tree_filename, item_id, filename_only)
         except Exception as e:
-            # 실패 시 URL 그대로 유지하거나 에러 표시
             self.root.after(0, self.update_tree_filename, item_id, f"오류: {url}")
 
     def process_queue(self):
@@ -271,22 +353,15 @@ class ChzzkDownloaderV4:
                 p = d.get('_percent_str', '').strip()
                 self.root.after(0, self.update_status, item_id, "다운로드 중", p)
 
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': full_template,
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'progress_hooks': [progress_hook],
-        }
+        # 다운로드용 옵션 생성 (쿠키 적용)
+        ydl_opts = self.get_ydl_opts(full_template)
+        ydl_opts['noplaylist'] = True
+        ydl_opts['progress_hooks'] = [progress_hook]
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # 다운로드 전 중복 체크
                 info = ydl.extract_info(url, download=False)
                 target_file = ydl.prepare_filename(info)
-
-                # 다운로드 시작 시에도 파일명 다시 한 번 갱신 (확실하게 하기 위함)
                 filename_only = os.path.splitext(os.path.basename(target_file))[0]
                 self.root.after(0, self.update_tree_filename, item_id, filename_only)
 
@@ -332,7 +407,6 @@ class ChzzkDownloaderV4:
             self.toggle_buttons(status)
 
     def update_status(self, item_id, status=None, progress=None, status_text=None):
-        """상태 컬럼만 안전하게 업데이트"""
         try:
             curr = self.tree.item(item_id)['values']
             new_status = status if status else curr[1]
@@ -341,14 +415,12 @@ class ChzzkDownloaderV4:
         except: pass
 
     def update_tree_filename(self, item_id, filename):
-        """파일명 컬럼 업데이트"""
         try:
             curr = self.tree.item(item_id)['values']
-            # curr[0]이 파일명 자리
             self.tree.item(item_id, values=(filename, curr[1], curr[2]))
         except: pass
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ChzzkDownloaderV4(root)
+    app = ChzzkDownloaderV5(root)
     root.mainloop()
