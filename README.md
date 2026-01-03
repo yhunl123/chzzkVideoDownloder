@@ -1,7 +1,8 @@
 # Chzzk VOD Downloader (치지직 다시보기 다운로더)
+## AI 대화 전문 : https://gemini.google.com/share/cf41af84712e
 
-네이버 치지직(Chzzk)의 다시보기(VOD) 영상을 다운로드할 수 있는 Python 기반의 GUI 프로그램입니다.
-**yt-dlp**를 사용하여 메타데이터를 파싱하고, **FFmpeg**를 직접 호출하여 다운로드 안정성을 극대화했습니다.
+### 네이버 치지직(Chzzk)의 다시보기(VOD) 영상을 다운로드할 수 있는 Python 기반의 GUI 프로그램입니다. 
+### **yt-dlp**를 사용하여 메타데이터를 파싱하고, **FFmpeg**를 직접 호출하여 다운로드 안정성을 극대화했습니다.
 
 ## 📌 주요 기능
 
@@ -42,7 +43,7 @@ python chzzkVideoDownloder.py
 CMD 또는 터미널에서 다음 명령어를 입력합니다.
 
 ```Bash
-pyinstaller --noconsole --onefile --name "ChzzkDownloader" chzzkVideoDownloder.py
+pyinstaller --noconsole --onefile --hidden-import=yt_dlp --name "ChzzkDownloader" chzzkVideoDownloder.py
 ```
 --noconsole: 실행 시 검은색 콘솔 창을 띄우지 않음.
 
